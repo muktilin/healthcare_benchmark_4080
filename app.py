@@ -18,7 +18,14 @@ from ultralytics import YOLO
 from tool.action import ActionRecognizer
 from tool.ocr import TimeOCR
 from tool.reid import ReIDExtractor
-from tool.generate_summary import get_person_activity_log, query_qwen_summary, _normalize_date
+from tool.generate_summary import get_person_activity_log, _normalize_date
+from tool.generate_summary_on_chip import (
+    ON_CHIP_MODEL_NAME,
+    empty_summary_cards,
+    generate_on_chip_summary,
+    is_valid_on_chip_response,
+    render_on_chip_summary,
+)
 from tool.video_preprocessing import process_dataset_folder, build_db_parallel
 
 
@@ -133,6 +140,94 @@ button.secondary-action {
 .output-panel pre,
 .output-panel .scroll-hide {
   font-family: "IBM Plex Mono", "Menlo", monospace !important;
+}
+
+.summary-panel {
+  min-height: 360px;
+  background: var(--panel-strong, #fffaf3);
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: inset 0 0 26px rgba(15, 118, 110, 0.06);
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-item {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 108px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-left: 5px solid var(--accent);
+  border-radius: 8px;
+}
+
+.summary-item.summary {
+  border-left-color: #2563eb;
+}
+
+.summary-item.actions {
+  border-left-color: var(--accent);
+}
+
+.summary-item.risk {
+  border-left-color: #c2410c;
+}
+
+.summary-item.anomaly {
+  border-left-color: var(--accent-2);
+}
+
+.summary-item.advice {
+  border-left-color: #5b8c00;
+  grid-column: 1 / -1;
+}
+
+.summary-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 118, 110, 0.08);
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 8px;
+  font-size: 23px;
+}
+
+.summary-name {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.summary-value {
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.summary-empty {
+  min-height: 334px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  border: 1px dashed rgba(15, 118, 110, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.46);
+  font-size: 16px;
+  text-align: center;
 }
 """
 
@@ -676,7 +771,7 @@ def generate_log(
     cam_videos,
 ):
     if person_id is None:
-        return "Select a person first."
+        return empty_summary_cards("Select a person first.")
     log = build_dense_log(
         person_id,
         db_path=db_path,
@@ -686,11 +781,11 @@ def generate_log(
         step=1,
     )
     if not log:
-        return "No valid activity log was found."
-    thinking, summary = query_qwen_summary(person_id, log)
-    if not summary:
-        return "Qwen did not return a valid summary."
-    return summary
+        return empty_summary_cards("No valid activity log was found.")
+    summary = generate_on_chip_summary(person_id, log, model_name=ON_CHIP_MODEL_NAME)
+    if not is_valid_on_chip_response(summary):
+        return empty_summary_cards(summary or "Summary model did not return a valid summary.")
+    return render_on_chip_summary(summary)
 
 
 def build_dense_log(
@@ -806,11 +901,7 @@ def build_app(video_root):
                         gr.HTML('<div class="section-title">Outputs</div>')
                         with gr.Tabs():
                             with gr.Tab("Summary Report"):
-                                log_all = gr.Textbox(
-                                    label="Summary Report",
-                                    lines=18,
-                                    elem_classes=["output-panel"],
-                                )
+                                log_all = gr.HTML(value=empty_summary_cards())
                             with gr.Tab("Action Timeline"):
                                 timeline_all = gr.Textbox(
                                     label="Action Timeline",

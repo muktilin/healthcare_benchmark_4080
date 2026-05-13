@@ -1,20 +1,27 @@
 import sqlite3
 import re
-import pandas as pd
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 
-# model_name = "Qwen/Qwen3-32B"
-model_name = "Qwen/Qwen1.5-0.5B"
+DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen3-32B"
+_MODEL_CACHE = {}
 
-print(f"Loading model: {model_name}...")
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype="auto",
-    device_map="auto"
-)
+
+def _get_qwen_model(model_name=DEFAULT_QWEN_MODEL_NAME):
+    cached = _MODEL_CACHE.get(model_name)
+    if cached is not None:
+        return cached
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    print(f"Loading model: {model_name}...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="auto"
+    )
+    _MODEL_CACHE[model_name] = (tokenizer, model)
+    return tokenizer, model
 
 
 def _normalize_date(text):
@@ -42,6 +49,8 @@ def get_person_activity_log(
     if not Path(db_path).exists():
         print(f"Error: Database file not found at {db_path}")
         return None
+
+    import pandas as pd
         
     conn = sqlite3.connect(db_path)
     
@@ -118,6 +127,8 @@ def get_person_action_timeline(person_id, db_path="video_data.db", date_filter=N
     """
     if not Path(db_path).exists():
         return None
+
+    import pandas as pd
     conn = sqlite3.connect(db_path)
     query = """
     SELECT ocr_time, timestamp, action, video_name
@@ -171,7 +182,7 @@ def get_person_action_timeline(person_id, db_path="video_data.db", date_filter=N
     return "\n".join(lines)
 
 
-def query_qwen_summary(person_id, log_text):
+def query_qwen_summary(person_id, log_text, model_name=DEFAULT_QWEN_MODEL_NAME):
     if not log_text:
         return "No activity log found."
     
@@ -229,6 +240,7 @@ def query_qwen_summary(person_id, log_text):
     ]
 
     # --- Inference Logic ---
+    tokenizer, model = _get_qwen_model(model_name)
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
     model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 

@@ -1,14 +1,127 @@
 import argparse
+import html
+import json
 import re
 from typing import List, Tuple
-
-from llm_api_client import LLMClient
-
 
 ON_CHIP_MODEL_NAME = "nvidia/DLER-R1-1.5B-Research"
 ON_CHIP_SERVER_URL_DEFAULT = "http://192.168.115.190:8080"
 
 _CLIENT_CACHE = {}
+
+
+def is_valid_on_chip_response(text: str) -> bool:
+    if not text or not text.strip():
+        return False
+    lowered = text.lower()
+    invalid_markers = (
+        "no activity log found",
+        "did not return",
+        "could not connect",
+        "error:",
+        "no response from model",
+        "unexpected response format",
+    )
+    return not any(marker in lowered for marker in invalid_markers)
+
+
+def _clean_json_text(text: str) -> str:
+    stripped = (text or "").strip()
+    stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped)
+    match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+    return match.group(0) if match else stripped
+
+
+def _stringify_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value if item is not None)
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {val}" for key, val in value.items())
+    return str(value).strip()
+
+
+def parse_on_chip_summary(text: str) -> dict:
+    fields = {}
+    label_map = {
+        "summary": "summary",
+        "key actions": "key_actions",
+        "key_actions": "key_actions",
+        "risk": "risk",
+        "anomaly": "anomaly",
+        "advice": "advice",
+        "advise": "advice",
+    }
+
+    try:
+        payload = json.loads(_clean_json_text(text))
+        fields.update(
+            {
+                "summary": _stringify_value(payload.get("summary") or payload.get("Summary")),
+                "key_actions": _stringify_value(
+                    payload.get("key_actions")
+                    or payload.get("key actions")
+                    or payload.get("Key actions")
+                    or payload.get("Key Actions")
+                ),
+                "risk": _stringify_value(payload.get("risk") or payload.get("Risk")),
+                "anomaly": _stringify_value(payload.get("anomaly") or payload.get("Anomaly")),
+                "advice": _stringify_value(payload.get("advice") or payload.get("advise") or payload.get("Advice")),
+            }
+        )
+    except Exception:
+        labels = "|".join(re.escape(label) for label in label_map)
+        pattern = re.compile(
+            rf"(?P<label>{labels})\s*:\s*(?P<value>.*?)(?=\n\s*(?:{labels})\s*:|\Z)",
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(text or ""):
+            key = label_map[match.group("label").lower()]
+            fields[key] = match.group("value").strip()
+
+    defaults = {
+        "summary": "No clear summary was returned.",
+        "key_actions": "Limited evidence.",
+        "risk": "Limited evidence.",
+        "anomaly": "None reported.",
+        "advice": "Review the activity timeline and continue routine observation.",
+    }
+    return {key: fields.get(key) or value for key, value in defaults.items()}
+
+
+def render_summary_cards(report: dict) -> str:
+    items = [
+        ("summary", "📝", "Summary", report["summary"]),
+        ("actions", "✅", "Key actions", report["key_actions"]),
+        ("risk", "⚠️", "Risk", report["risk"]),
+        ("anomaly", "🔎", "Anomaly", report["anomaly"]),
+        ("advice", "💡", "Advice", report["advice"]),
+    ]
+    cards = []
+    for css_name, icon, name, value in items:
+        safe_value = html.escape(value).replace("\n", "<br>")
+        cards.append(
+            f"""
+            <div class="summary-item {css_name}">
+              <div class="summary-icon">{html.escape(icon)}</div>
+              <div>
+                <div class="summary-name">{html.escape(name)}</div>
+                <div class="summary-value">{safe_value}</div>
+              </div>
+            </div>
+            """
+        )
+    return f"<div class='summary-panel'><div class='summary-grid'>{''.join(cards)}</div></div>"
+
+
+def render_on_chip_summary(text: str) -> str:
+    return render_summary_cards(parse_on_chip_summary(text))
+
+
+def empty_summary_cards(message: str = "Generate a summary to review structured care items.") -> str:
+    return f"<div class='summary-panel'><div class='summary-empty'>{html.escape(message)}</div></div>"
 
 
 def _parse_log_line(line: str) -> Tuple[str, str]:
@@ -76,6 +189,8 @@ def _get_client(model_name: str = ON_CHIP_MODEL_NAME, server_url: str = ON_CHIP_
     cache_key = (server_url, model_name)
     client = _CLIENT_CACHE.get(cache_key)
     if client is None:
+        from llm_api_client import LLMClient
+
         client = LLMClient(
             server_url=server_url,
             model=model_name,
