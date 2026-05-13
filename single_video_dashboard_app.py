@@ -190,16 +190,13 @@ body,
 }
 
 .work-row > .column:first-child {
-  flex: 1.05 1 0 !important;
+  flex: 9 1 0 !important;
+  min-width: 0;
 }
 
 .work-row > .column:nth-child(2) {
-  flex: 0 0 330px !important;
-  max-width: 330px !important;
-}
-
-.work-row > .column:nth-child(3) {
-  flex: 1.75 1 0 !important;
+  flex: 11 1 0 !important;
+  min-width: 0;
 }
 
 .section-title {
@@ -244,6 +241,7 @@ button.secondary-action {
   margin: -2px 0 8px;
 }
 
+.left-work-stack,
 .visual-stack,
 .control-stack,
 .output-stack {
@@ -251,17 +249,30 @@ button.secondary-action {
   overflow: visible;
 }
 
-.visual-stack {
-  flex: 1.05 1 0 !important;
+.left-work-stack {
+  gap: 10px !important;
 }
 
+.selection-control-row {
+  gap: 10px !important;
+  align-items: stretch !important;
+}
+
+.selection-control-row > .column:first-child,
+.visual-stack {
+  flex: 6 1 0 !important;
+  min-width: 0;
+}
+
+.selection-control-row > .column:nth-child(2),
 .control-stack {
   flex: 0 0 330px !important;
   max-width: 330px !important;
 }
 
 .output-stack {
-  flex: 1.75 1 0 !important;
+  flex: 11 1 0 !important;
+  min-width: 0;
 }
 
 .visual-stack .compact-panel,
@@ -273,6 +284,10 @@ button.secondary-action {
   height: 720px;
 }
 
+.emotion-panel {
+  min-height: 0 !important;
+}
+
 .preview-col {
   flex: 7 1 0 !important;
 }
@@ -282,11 +297,14 @@ button.secondary-action {
 }
 
 .visual-stack .gr-image,
+.emotion-panel .gr-image,
+.emotion-panel .image-container,
 .visual-stack .image-container {
   border-radius: 8px !important;
 }
 
 .visual-stack .gr-image,
+.emotion-panel .gr-image,
 .output-stack textarea {
   background: var(--field) !important;
   border-color: rgba(15, 118, 110, 0.18) !important;
@@ -1119,65 +1137,67 @@ def build_app(video_root, project_db_dir):
                         status = gr.Textbox(label="Status", interactive=False, scale=2)
 
             with gr.Row(elem_classes=["work-row"]):
-                with gr.Column(scale=6, elem_classes=["visual-stack"]):
-                    with gr.Group(elem_classes=["panel", "compact-panel"]):
-                        gr.HTML('<div class="section-title">Visual Selection</div>')
-                        gr.Markdown(
-                            "<div class='compact-note'>Load a preview frame, click the target person, and keep all downstream work scoped to this video.</div>"
-                        )
-                        with gr.Row():
-                            with gr.Column(scale=7, elem_classes=["preview-col"]):
-                                image = gr.Image(label="Preview Frame", type="numpy", height=635)
-                            with gr.Column(scale=3, elem_classes=["crop-col"]):
-                                crop_preview = gr.Image(label="Selected Crop", type="numpy", height=635)
+                with gr.Column(scale=9, elem_classes=["left-work-stack"]):
+                    with gr.Row(elem_classes=["selection-control-row"]):
+                        with gr.Column(scale=6, elem_classes=["visual-stack"]):
+                            with gr.Group(elem_classes=["panel", "compact-panel"]):
+                                gr.HTML('<div class="section-title">Visual Selection</div>')
+                                gr.Markdown(
+                                    "<div class='compact-note'>Load a preview frame, click the target person, and keep all downstream work scoped to this video.</div>"
+                                )
+                                with gr.Row():
+                                    with gr.Column(scale=7, elem_classes=["preview-col"]):
+                                        image = gr.Image(label="Preview Frame", type="numpy", height=635)
+                                    with gr.Column(scale=3, elem_classes=["crop-col"]):
+                                        crop_preview = gr.Image(label="Selected Crop", type="numpy", height=635)
 
-                    with gr.Group(elem_classes=["panel", "compact-panel"]):
+                        with gr.Column(scale=3, elem_classes=["control-stack"]):
+                            with gr.Group(elem_classes=["panel", "compact-panel", "identity-panel"]):
+                                gr.HTML('<div class="section-title">Identity And Run</div>')
+                                text_prompt = gr.Textbox(
+                                    label="Description",
+                                    placeholder="Optional note about the selected person.",
+                                    lines=1,
+                                )
+                                result = gr.Textbox(label="Match Result", interactive=False, lines=2)
+                                with gr.Row():
+                                    select_btn = gr.Button("Confirm Identity", elem_classes=["primary-action"])
+                                    log_btn = gr.Button("Generate Summary", elem_classes=["secondary-action"])
+                                    track_btn = gr.Button("Track And Write To DB", elem_classes=["primary-action"])
+
+                            with gr.Group(elem_classes=["panel", "compact-panel"]):
+                                gr.HTML('<div class="section-title">Summary Model</div>')
+                                summary_model = gr.Dropdown(
+                                    choices=AVAILABLE_SUMMARY_MODELS,
+                                    value=DEFAULT_SUMMARY_MODEL,
+                                    label="Summary Generation Model",
+                                    info="DLER uses a shorter prompt because the U250 deployment only supports about 600 total tokens.",
+                                )
+
+                            with gr.Accordion("Tracking Controls", open=False, elem_classes=["panel"]):
+                                with gr.Row():
+                                    reid_interval = gr.Number(value=10, precision=0, label="ReID Interval")
+                                    action_interval = gr.Number(value=6, precision=0, label="Action Interval")
+                                    ocr_interval_sec = gr.Number(value=1.0, label="OCR Interval (sec)")
+                                with gr.Row():
+                                    action_window_sec = gr.Number(value=5.0, label="Action Window (sec)")
+                                    action_frames = gr.Number(value=32, precision=0, label="Action Frames")
+                                    motion_trigger_threshold = gr.Number(value=0.0008, label="Motion Trigger")
+                                with gr.Row():
+                                    enable_emotion = gr.Checkbox(value=True, label="Show Emotion")
+                                    emotion_interval = gr.Number(value=12, precision=0, label="Emotion Interval (frames)")
+
+                            with gr.Accordion("Model And Detection Settings", open=False, elem_classes=["panel"]):
+                                with gr.Row():
+                                    detector_weights = gr.Textbox(value=PREVIEW_DETECTOR_WEIGHTS_DEFAULT, label="Detector Weights")
+                                    action_model_path = gr.Textbox(value="OpenGVLab/InternVL2_5-1B", label="Action Model")
+                                with gr.Row():
+                                    detector_imgsz = gr.Number(value=PREVIEW_DETECTOR_IMGSZ_DEFAULT, precision=0, label="Detector Image Size")
+                                    detector_conf = gr.Number(value=0.35, label="Detector Confidence")
+
+                    with gr.Group(elem_classes=["panel", "compact-panel", "emotion-panel"]):
                         gr.HTML('<div class="section-title">Live Emotion</div>')
-                        emotion_preview = gr.Image(label="Tracking With Emotion", type="numpy", height=460)
-
-                with gr.Column(scale=3, elem_classes=["control-stack"]):
-                    with gr.Group(elem_classes=["panel", "compact-panel", "identity-panel"]):
-                        gr.HTML('<div class="section-title">Identity And Run</div>')
-                        text_prompt = gr.Textbox(
-                            label="Description",
-                            placeholder="Optional note about the selected person.",
-                            lines=1,
-                        )
-                        result = gr.Textbox(label="Match Result", interactive=False, lines=2)
-                        with gr.Row():
-                            select_btn = gr.Button("Confirm Identity", elem_classes=["primary-action"])
-                            log_btn = gr.Button("Generate Summary", elem_classes=["secondary-action"])
-                            track_btn = gr.Button("Track And Write To DB", elem_classes=["primary-action"])
-
-                    with gr.Group(elem_classes=["panel", "compact-panel"]):
-                        gr.HTML('<div class="section-title">Summary Model</div>')
-                        summary_model = gr.Dropdown(
-                            choices=AVAILABLE_SUMMARY_MODELS,
-                            value=DEFAULT_SUMMARY_MODEL,
-                            label="Summary Generation Model",
-                            info="DLER uses a shorter prompt because the U250 deployment only supports about 600 total tokens.",
-                        )
-
-                    with gr.Accordion("Tracking Controls", open=False, elem_classes=["panel"]):
-                        with gr.Row():
-                            reid_interval = gr.Number(value=10, precision=0, label="ReID Interval")
-                            action_interval = gr.Number(value=6, precision=0, label="Action Interval")
-                            ocr_interval_sec = gr.Number(value=1.0, label="OCR Interval (sec)")
-                        with gr.Row():
-                            action_window_sec = gr.Number(value=5.0, label="Action Window (sec)")
-                            action_frames = gr.Number(value=32, precision=0, label="Action Frames")
-                            motion_trigger_threshold = gr.Number(value=0.0008, label="Motion Trigger")
-                        with gr.Row():
-                            enable_emotion = gr.Checkbox(value=True, label="Show Emotion")
-                            emotion_interval = gr.Number(value=12, precision=0, label="Emotion Interval (frames)")
-
-                    with gr.Accordion("Model And Detection Settings", open=False, elem_classes=["panel"]):
-                        with gr.Row():
-                            detector_weights = gr.Textbox(value=PREVIEW_DETECTOR_WEIGHTS_DEFAULT, label="Detector Weights")
-                            action_model_path = gr.Textbox(value="OpenGVLab/InternVL2_5-1B", label="Action Model")
-                        with gr.Row():
-                            detector_imgsz = gr.Number(value=PREVIEW_DETECTOR_IMGSZ_DEFAULT, precision=0, label="Detector Image Size")
-                            detector_conf = gr.Number(value=0.35, label="Detector Confidence")
+                        emotion_preview = gr.Image(label="Tracking With Emotion", type="numpy", height=380)
 
                 with gr.Column(scale=11, elem_classes=["output-stack"]):
                     with gr.Group(elem_classes=["panel", "compact-panel"]):
