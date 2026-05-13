@@ -250,7 +250,7 @@ button.secondary-action {
 }
 
 .left-work-stack {
-  gap: 10px !important;
+  gap: 2px !important;
 }
 
 .selection-control-row {
@@ -288,6 +288,7 @@ button.secondary-action {
 }
 
 .emotion-panel {
+  margin-top: -28px !important;
   min-height: 0 !important;
 }
 
@@ -335,24 +336,24 @@ button.secondary-action {
 }
 
 .output-panel textarea {
-  height: 600px !important;
-  min-height: 600px !important;
-  max-height: 600px !important;
+  height: 720px !important;
+  min-height: 720px !important;
+  max-height: 720px !important;
   box-shadow: inset 0 0 26px rgba(15, 118, 110, 0.06);
 }
 
 .output-panel,
 .output-panel .wrap,
 .output-panel .container {
-  height: 600px !important;
-  min-height: 600px !important;
+  height: 720px !important;
+  min-height: 720px !important;
 }
 
 .summary-panel {
   box-sizing: border-box;
-  height: 600px;
-  min-height: 600px;
-  max-height: 600px;
+  height: 720px;
+  min-height: 720px;
+  max-height: 720px;
   background: var(--field);
   border: 1px solid rgba(15, 118, 110, 0.18);
   border-radius: 8px;

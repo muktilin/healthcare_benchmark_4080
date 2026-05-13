@@ -165,13 +165,12 @@ def draw_landmark_mesh(image, landmarks):
     overlay = image.copy()
     for _, connections, color in LANDMARK_GROUPS:
         for start, end in connections:
-            cv2.line(overlay, landmarks[start], landmarks[end], color, 2, cv2.LINE_AA)
+            cv2.line(overlay, landmarks[start], landmarks[end], color, 1, cv2.LINE_AA)
     cv2.addWeighted(overlay, 0.76, image, 0.24, 0, image)
     for _, connections, color in LANDMARK_GROUPS:
         point_ids = sorted({idx for pair in connections for idx in pair})
         for idx in point_ids:
             cv2.circle(image, landmarks[idx], 1, color, -1, cv2.LINE_AA)
-            cv2.circle(image, landmarks[idx], 2, (8, 14, 16), 1, cv2.LINE_AA)
 
 
 def draw_box(image, bbox, color, label):
