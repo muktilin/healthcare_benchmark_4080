@@ -148,37 +148,50 @@ def _extract_generated_text(result) -> str:
     return str(result).strip()
 
 
-def _get_qwen_postprocess_pipe(model_name: str = QWEN_POSTPROCESS_MODEL_NAME):
-    pipe = _QWEN_POSTPROCESS_CACHE.get(model_name)
-    if pipe is None:
-        from transformers import pipeline
+def _get_qwen_postprocess_model(model_name: str = QWEN_POSTPROCESS_MODEL_NAME):
+    cached = _QWEN_POSTPROCESS_CACHE.get(model_name)
+    if cached is not None:
+        return cached
 
-        try:
-            pipe = pipeline("image-text-to-text", model=model_name, device_map="auto")
-        except TypeError:
-            pipe = pipeline("image-text-to-text", model=model_name)
-        _QWEN_POSTPROCESS_CACHE[model_name] = pipe
-    return pipe
+    from transformers import AutoTokenizer
+
+    try:
+        from transformers import AutoModelForImageTextToText
+
+        model_cls = AutoModelForImageTextToText
+    except ImportError:
+        from transformers import Qwen2_5_VLForConditionalGeneration
+
+        model_cls = Qwen2_5_VLForConditionalGeneration
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = model_cls.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    cached = (tokenizer, model)
+    _QWEN_POSTPROCESS_CACHE[model_name] = cached
+    return cached
 
 
 def _run_qwen_postprocess(prompt: str, model_name: str = QWEN_POSTPROCESS_MODEL_NAME) -> str:
-    pipe = _get_qwen_postprocess_pipe(model_name)
+    tokenizer, model = _get_qwen_postprocess_model(model_name)
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-            ],
+            "content": prompt,
         }
     ]
     try:
-        result = pipe(text=messages, max_new_tokens=512, do_sample=False)
-    except TypeError:
-        try:
-            result = pipe(messages, max_new_tokens=512, do_sample=False)
-        except TypeError:
-            result = pipe(prompt, max_new_tokens=512, do_sample=False)
-    return _extract_generated_text(result)
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    except Exception:
+        text = prompt
+    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    generated_ids = model.generate(**model_inputs, max_new_tokens=512, do_sample=False)
+    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
+    return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 
 def refine_on_chip_summary(
