@@ -1,0 +1,37 @@
+# Core numerical/runtime dependencies
+numpy==1.26.0
+pandas==2.3.3
+scipy==1.15.3
+tqdm==4.67.1
+requests==2.32.5
+
+# Computer vision and image/video processing
+opencv-python==4.7.0.72
+Pillow==12.0.0
+imageio==2.37.2
+imageio-ffmpeg==0.6.0
+decord==0.6.0
+ultralytics==8.3.235
+
+# Deep learning stack
+# torch==2.7.0+cu126
+# torchvision==0.22.0+cu126
+# torchaudio==2.7.0+cu126
+transformers==4.51.2
+accelerate==1.12.0
+tokenizers==0.21.4
+safetensors==0.7.0
+
+# Model/runtime utilities used by action recognition backends
+einops==0.8.1
+timm==1.0.22
+sentencepiece==0.2.1
+modelscope==1.32.0
+
+# Tracking / ReID / similarity
+boxmot==15.0.10
+scikit-learn==1.7.2
+filterpy==1.4.5
+
+# UI
+gradio==6.6.0
