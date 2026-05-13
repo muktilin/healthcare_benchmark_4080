@@ -275,13 +275,13 @@ button.secondary-action {
   min-width: 0;
 }
 
-.visual-stack .compact-panel,
 .output-stack .compact-panel {
   min-height: 720px;
 }
 
 .visual-stack .compact-panel {
-  height: 720px;
+  height: 560px;
+  min-height: 560px;
 }
 
 .emotion-panel {
@@ -1147,9 +1147,9 @@ def build_app(video_root, project_db_dir):
                                 )
                                 with gr.Row():
                                     with gr.Column(scale=7, elem_classes=["preview-col"]):
-                                        image = gr.Image(label="Preview Frame", type="numpy", height=635)
+                                        image = gr.Image(label="Preview Frame", type="numpy", height=475)
                                     with gr.Column(scale=3, elem_classes=["crop-col"]):
-                                        crop_preview = gr.Image(label="Selected Crop", type="numpy", height=635)
+                                        crop_preview = gr.Image(label="Selected Crop", type="numpy", height=475)
 
                         with gr.Column(scale=3, elem_classes=["control-stack"]):
                             with gr.Group(elem_classes=["panel", "compact-panel", "identity-panel"]):
@@ -1170,8 +1170,6 @@ def build_app(video_root, project_db_dir):
                                 summary_model = gr.Dropdown(
                                     choices=AVAILABLE_SUMMARY_MODELS,
                                     value=DEFAULT_SUMMARY_MODEL,
-                                    label="Summary Generation Model",
-                                    info="DLER uses a shorter prompt because the U250 deployment only supports about 600 total tokens.",
                                 )
 
                             with gr.Accordion("Tracking Controls", open=False, elem_classes=["panel"]):
