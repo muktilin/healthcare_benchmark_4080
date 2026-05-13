@@ -21,11 +21,13 @@ from tool.reid import ReIDExtractor
 from tool.generate_summary import get_person_activity_log, _normalize_date
 from tool.generate_summary_on_chip import (
     ON_CHIP_MODEL_NAME,
+    clear_qwen_postprocess_cache,
     empty_summary_cards,
     generate_on_chip_summary,
     is_valid_on_chip_response,
     render_refined_on_chip_summary,
 )
+from tool.gpu_cleanup import cleanup_after, cleanup_after_generator
 from tool.video_preprocessing import process_dataset_folder, build_db_parallel
 
 
@@ -35,6 +37,11 @@ PREVIEW_DETECTOR_WEIGHTS_DEFAULT = "yolo11l-pose.pt"
 PREVIEW_DETECTOR_IMGSZ_DEFAULT = 960
 
 _DETECTOR_CACHE = {}
+
+
+def _clear_app_gpu_caches():
+    _DETECTOR_CACHE.clear()
+    clear_qwen_postprocess_cache()
 
 APP_CSS = """
 :root {
@@ -982,7 +989,7 @@ def build_app(video_root):
             return frame, bboxes, vis, status_msg, cam_videos, (date_guess or ""), db_path
 
         load_btn.click(
-            _load,
+            cleanup_after(_load, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[recording_dropdown, frame_idx, db_path, detector_weights, detector_imgsz, detector_conf],
             outputs=[frame_state, bboxes_state, image, status, cam_videos_state, date_filter, db_path],
         )
@@ -1004,13 +1011,13 @@ def build_app(video_root):
             return bbox, crop, feat, msg
 
         image.select(
-            _on_click,
+            cleanup_after(_on_click, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[frame_state, bboxes_state, detector_weights, detector_imgsz, detector_conf],
             outputs=[bbox_state, crop_preview, feature_state, status],
         )
 
         select_btn.click(
-            choose_person_id,
+            cleanup_after(choose_person_id, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[db_path, frame_state, bbox_state, text_prompt, recording_dropdown, frame_idx, cam_videos_state],
             outputs=[person_id_state, result],
         )
@@ -1028,7 +1035,7 @@ def build_app(video_root):
             return generate_log(db_path, person_id, date_filter, video_names)
 
         log_btn.click(
-            _gen_all,
+            cleanup_after(_gen_all, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[db_path, person_id_state, date_filter, cam_videos_state],
             outputs=[log_all],
         )
@@ -1318,7 +1325,7 @@ def build_app(video_root):
                 yield "The target person was not found in any camera.", "No valid action timeline."
 
         track_btn.click(
-            _track_person,
+            cleanup_after_generator(_track_person, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[
                 recording_dropdown,
                 db_path,

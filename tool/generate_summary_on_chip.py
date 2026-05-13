@@ -12,6 +12,10 @@ _CLIENT_CACHE = {}
 _QWEN_POSTPROCESS_CACHE = {}
 
 
+def clear_qwen_postprocess_cache():
+    _QWEN_POSTPROCESS_CACHE.clear()
+
+
 def is_valid_on_chip_response(text: str) -> bool:
     if not text or not text.strip():
         return False
