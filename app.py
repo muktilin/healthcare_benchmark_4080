@@ -24,7 +24,7 @@ from tool.generate_summary_on_chip import (
     empty_summary_cards,
     generate_on_chip_summary,
     is_valid_on_chip_response,
-    render_on_chip_summary,
+    render_refined_on_chip_summary,
 )
 from tool.video_preprocessing import process_dataset_folder, build_db_parallel
 
@@ -782,10 +782,13 @@ def generate_log(
     )
     if not log:
         return empty_summary_cards("No valid activity log was found.")
-    summary = generate_on_chip_summary(person_id, log, model_name=ON_CHIP_MODEL_NAME)
+    try:
+        summary = generate_on_chip_summary(person_id, log, model_name=ON_CHIP_MODEL_NAME)
+    except Exception as exc:
+        summary = f"Error: {exc}"
     if not is_valid_on_chip_response(summary):
-        return empty_summary_cards(summary or "Summary model did not return a valid summary.")
-    return render_on_chip_summary(summary)
+        print(f"[OnChip] Summary needs Qwen supplementation: {summary}")
+    return render_refined_on_chip_summary(summary, log_text=log, person_id=person_id)
 
 
 def build_dense_log(

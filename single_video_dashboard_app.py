@@ -19,7 +19,7 @@ from tool.generate_summary_on_chip import (
     empty_summary_cards,
     generate_on_chip_summary,
     is_valid_on_chip_response,
-    render_on_chip_summary,
+    render_refined_on_chip_summary,
 )
 from tool.ocr import TimeOCR
 from tool.reid import ReIDExtractor
@@ -935,10 +935,13 @@ def generate_log(db_path, person_id, date_filter, video_path, summary_model_name
         return empty_summary_cards("No valid activity log was found.")
     if summary_model_name not in AVAILABLE_SUMMARY_MODELS:
         return empty_summary_cards(f"Unsupported summary model: {summary_model_name}")
-    summary = generate_on_chip_summary(person_id, log, model_name=summary_model_name)
+    try:
+        summary = generate_on_chip_summary(person_id, log, model_name=summary_model_name)
+    except Exception as exc:
+        summary = f"Error: {exc}"
     if not is_valid_on_chip_response(summary):
-        return empty_summary_cards(summary or "Summary model did not return a valid summary.")
-    return render_on_chip_summary(summary)
+        print(f"[OnChip] Summary needs Qwen supplementation: {summary}")
+    return render_refined_on_chip_summary(summary, log_text=log, person_id=person_id)
 
 
 def load_video_state(

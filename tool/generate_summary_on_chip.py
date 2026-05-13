@@ -6,8 +6,10 @@ from typing import List, Tuple
 
 ON_CHIP_MODEL_NAME = "nvidia/DLER-R1-1.5B-Research"
 ON_CHIP_SERVER_URL_DEFAULT = "http://192.168.115.190:8080"
+QWEN_POSTPROCESS_MODEL_NAME = "Qwen/Qwen3.5-2B"
 
 _CLIENT_CACHE = {}
+_QWEN_POSTPROCESS_CACHE = {}
 
 
 def is_valid_on_chip_response(text: str) -> bool:
@@ -118,6 +120,115 @@ def render_summary_cards(report: dict) -> str:
 
 def render_on_chip_summary(text: str) -> str:
     return render_summary_cards(parse_on_chip_summary(text))
+
+
+def _extract_generated_text(result) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        for key in ("generated_text", "text", "output_text"):
+            if key in result:
+                return _extract_generated_text(result[key])
+        return ""
+    if isinstance(result, list):
+        if not result:
+            return ""
+        if all(isinstance(item, dict) and "role" in item for item in result):
+            for message in reversed(result):
+                if message.get("role") == "assistant":
+                    content = message.get("content", "")
+                    if isinstance(content, list):
+                        return "\n".join(
+                            part.get("text", "")
+                            for part in content
+                            if isinstance(part, dict) and part.get("type") == "text"
+                        ).strip()
+                    return str(content).strip()
+        return _extract_generated_text(result[0])
+    return str(result).strip()
+
+
+def _get_qwen_postprocess_pipe(model_name: str = QWEN_POSTPROCESS_MODEL_NAME):
+    pipe = _QWEN_POSTPROCESS_CACHE.get(model_name)
+    if pipe is None:
+        from transformers import pipeline
+
+        try:
+            pipe = pipeline("image-text-to-text", model=model_name, device_map="auto")
+        except TypeError:
+            pipe = pipeline("image-text-to-text", model=model_name)
+        _QWEN_POSTPROCESS_CACHE[model_name] = pipe
+    return pipe
+
+
+def _run_qwen_postprocess(prompt: str, model_name: str = QWEN_POSTPROCESS_MODEL_NAME) -> str:
+    pipe = _get_qwen_postprocess_pipe(model_name)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    try:
+        result = pipe(text=messages, max_new_tokens=512, do_sample=False)
+    except TypeError:
+        try:
+            result = pipe(messages, max_new_tokens=512, do_sample=False)
+        except TypeError:
+            result = pipe(prompt, max_new_tokens=512, do_sample=False)
+    return _extract_generated_text(result)
+
+
+def refine_on_chip_summary(
+    on_chip_text: str,
+    log_text: str = "",
+    person_id: int = None,
+    model_name: str = QWEN_POSTPROCESS_MODEL_NAME,
+) -> dict:
+    compact_log = _compress_log_for_small_model(log_text, max_items=24, max_chars=2400) if log_text else ""
+    prompt = (
+        "You are refining an elder-care activity summary.\n"
+        "Return only one JSON object with exactly these keys:\n"
+        "summary, key_actions, risk, anomaly, advice.\n"
+        "Rules:\n"
+        "- Use the on-chip summary first.\n"
+        "- If the on-chip summary is vague, malformed, missing fields, or says evidence is limited, "
+        "use the timeline records to supplement.\n"
+        "- Do not invent actions, risks, or anomalies that are not supported by the summary or timeline.\n"
+        "- Keep each field concise and caregiver-facing.\n"
+        "- If evidence is still insufficient, say limited evidence in the affected field.\n"
+        f"Person ID: {person_id if person_id is not None else 'unknown'}\n\n"
+        f"On-chip summary:\n{on_chip_text or 'None'}\n\n"
+        f"Timeline records:\n{compact_log or 'None'}"
+    )
+
+    try:
+        qwen_text = _run_qwen_postprocess(prompt, model_name=model_name)
+        if qwen_text and is_valid_on_chip_response(qwen_text):
+            return parse_on_chip_summary(qwen_text)
+    except Exception as exc:
+        print(f"[QwenPostprocess] Falling back to rule parser: {exc}")
+
+    fallback_text = on_chip_text if is_valid_on_chip_response(on_chip_text) else ""
+    return parse_on_chip_summary(fallback_text)
+
+
+def render_refined_on_chip_summary(
+    on_chip_text: str,
+    log_text: str = "",
+    person_id: int = None,
+    model_name: str = QWEN_POSTPROCESS_MODEL_NAME,
+) -> str:
+    return render_summary_cards(
+        refine_on_chip_summary(
+            on_chip_text=on_chip_text,
+            log_text=log_text,
+            person_id=person_id,
+            model_name=model_name,
+        )
+    )
 
 
 def empty_summary_cards(message: str = "Generate a summary to review structured care items.") -> str:
