@@ -76,7 +76,7 @@ def parse_on_chip_summary(text: str) -> dict:
     except Exception:
         labels = "|".join(re.escape(label) for label in label_map)
         pattern = re.compile(
-            rf"(?P<label>{labels})\s*:\s*(?P<value>.*?)(?=\n\s*(?:{labels})\s*:|\Z)",
+            rf"(?P<label>{labels})\s*:\s*(?P<value>.*?)(?=\s*(?:{labels})\s*:|\Z)",
             flags=re.IGNORECASE | re.DOTALL,
         )
         for match in pattern.finditer(text or ""):
@@ -255,7 +255,9 @@ def _sentence_count(text: str) -> int:
 
 
 def _report_has_timeline_detail(report: dict) -> bool:
-    return _has_time_reference(report.get("summary", "")) and _sentence_count(report.get("summary", "")) >= 3
+    summary = report.get("summary", "")
+    leaked_labels = re.search(r"\b(key actions|risk|anomaly|advice|advise)\s*:", summary, flags=re.IGNORECASE)
+    return _has_time_reference(summary) and _sentence_count(summary) >= 3 and not leaked_labels
 
 
 def _line_time_and_action(line: str) -> Tuple[str, str]:
@@ -271,6 +273,108 @@ def _time_bounds(time_part: str) -> Tuple[str, str]:
         return stripped, stripped
     start, end = time_part.split("->", 1)
     return start.strip(), end.strip()
+
+
+def _compact_action_label(action: str) -> str:
+    action = re.sub(r"\s+", " ", action or "").strip(" .;")
+    lowered = action.lower()
+    if "sitting" in lowered and "looking down" in lowered:
+        return "sitting and looking down"
+    if "holding" in lowered and "examining" in lowered and "tissue" in lowered:
+        return "examining a tissue"
+    if "holding" in lowered and "examining" in lowered:
+        return "examining a small object"
+    if "phone" in lowered or "conversation" in lowered:
+        return "phone conversation"
+    if "interacting" in lowered and ("individual" in lowered or "person" in lowered):
+        return "interacting with another person"
+    if "resting" in lowered or "waiting" in lowered:
+        return "resting or waiting"
+    if "walking" in lowered:
+        return "walking"
+    if "standing" in lowered:
+        return "standing"
+    if "sitting" in lowered:
+        return "sitting"
+    if "lying" in lowered:
+        return "lying"
+    prefixes = (
+        "the person is ",
+        "person is ",
+        "the person appears to be ",
+        "person appears to be ",
+        "appears to be ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            action = action[len(prefix):]
+            break
+    action = re.sub(r"\bthe person\b", "person", action, flags=re.IGNORECASE)
+    if len(action) > 70:
+        action = action[:67].rsplit(" ", 1)[0] + "..."
+    return action.strip()
+
+
+def _unique_actions(segments: List[Tuple[str, str]], limit: int = 5) -> List[str]:
+    actions = []
+    seen = set()
+    for _, action in segments:
+        label = _compact_action_label(action)
+        key = label.lower()
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        actions.append(label)
+        if len(actions) >= limit:
+            break
+    return actions
+
+
+def _strip_time_references(text: str) -> str:
+    text = re.sub(r"\(?\b\d{4}[-/]\d{2}[-/]\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*->\s*\d{4}[-/]\d{2}[-/]\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?)?\)?", "", text or "")
+    text = re.sub(r"\(?\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*->\s*\d{1,2}:\d{2}(?::\d{2})?)?\)?", "", text)
+    text = re.sub(r"\(?\bT\+\d+(?:\.\d+)?s?\)?", "", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\s+([,.;])", r"\1", text)
+    text = re.sub(r"\bfrom\s+to\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bto\s+window\b", "window", text, flags=re.IGNORECASE)
+    return text.strip(" ,;")
+
+
+def _dedupe_list_text(text: str, max_items: int = 5) -> str:
+    parts = [part.strip(" ,.;") for part in re.split(r";|\n|,(?=\s*(?:the person|person|[A-Za-z]+ing\b))", text or "")]
+    deduped = []
+    seen = set()
+    for part in parts:
+        cleaned = _compact_action_label(_strip_time_references(part))
+        key = cleaned.lower()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cleaned)
+        if len(deduped) >= max_items:
+            break
+    return "; ".join(deduped)
+
+
+def _clean_refined_report(report: dict) -> dict:
+    cleaned = dict(report)
+    cleaned["key_actions"] = _dedupe_list_text(cleaned.get("key_actions", ""), max_items=5) or "Limited evidence."
+
+    risk = _strip_time_references(cleaned.get("risk", ""))
+    risk = re.sub(r"\baround\s*[,;]?\s*", "", risk, flags=re.IGNORECASE).strip(" ,;")
+    cleaned["risk"] = risk or "Limited risk evidence."
+
+    anomaly = _strip_time_references(cleaned.get("anomaly", ""))
+    if not anomaly or "none observed" in anomaly.lower():
+        anomaly = "None observed in the DB timeline."
+    cleaned["anomaly"] = anomaly
+
+    advice = _strip_time_references(cleaned.get("advice", ""))
+    if re.search(r"\buse\s+the\s+window\b", advice, flags=re.IGNORECASE):
+        advice = ""
+    cleaned["advice"] = advice or "Continue routine observation and review comfort or posture changes."
+    return cleaned
 
 
 def _build_timeline_report(log_text: str, person_id: int = None, base_report: dict = None) -> dict:
@@ -292,55 +396,50 @@ def _build_timeline_report(log_text: str, person_id: int = None, base_report: di
     last_time = _time_bounds(segments[-1][0])[1] if segments else ""
     observed_window = f"{first_time} to {last_time}" if first_time and last_time and first_time != last_time else first_time or last_time
 
-    action_order = []
-    for _, action in segments:
-        if action not in action_order:
-            action_order.append(action)
-    action_flow = ", ".join(action_order[:6]) or "recorded activity"
+    actions = _unique_actions(segments, limit=5)
+    action_flow = ", ".join(actions) or "recorded activity"
 
+    detail_segments = []
+    seen_detail = set()
+    for time_part, action in segments:
+        label = _compact_action_label(action)
+        if not label or label.lower() in seen_detail:
+            continue
+        seen_detail.add(label.lower())
+        detail_segments.append((time_part, label))
+        if len(detail_segments) >= 1:
+            break
     detail_sentences = []
-    for time_part, action in segments[:4]:
-        if time_part:
-            detail_sentences.append(f"At {time_part}, the DB timeline records {action}.")
-        else:
-            detail_sentences.append(f"The DB timeline records {action}.")
+    for time_part, action in detail_segments:
+        detail_sentences.append(f"Around {time_part}, the timeline shows {action}." if time_part else f"The timeline shows {action}.")
     summary_sentences = [
         f"For person {person_id if person_id is not None else 'the selected person'}, the DB timeline covers {observed_window}."
         if observed_window
         else f"For person {person_id if person_id is not None else 'the selected person'}, the DB timeline records the observed activity flow.",
-        f"The main activity flow is {action_flow}.",
+        f"Across that period, the main activity flow is {action_flow}.",
     ] + detail_sentences
-    summary = " ".join(summary_sentences[:5])
+    summary = " ".join(summary_sentences[:4])
 
-    key_actions = "; ".join(
-        f"{action} ({time_part})" if time_part else action
-        for time_part, action in segments[:8]
-    )
-    mobility_times = [
-        time_part
-        for time_part, action in segments
+    key_actions = "; ".join(actions)
+    mobility_actions = [
+        action
+        for action in actions
         if any(keyword in action.lower() for keyword in ("walking", "standing", "fall", "lying", "sitting"))
     ]
-    if mobility_times:
-        risk = (
-            f"Low to mild mobility risk around {', '.join(mobility_times[:4])}; "
-            "review posture changes and walking intervals in the DB timeline."
-        )
+    if mobility_actions:
+        risk = "Low to mild mobility risk; review posture changes and any walking or standing intervals."
     else:
-        risk = f"Limited mobility risk evidence in the observed DB window {observed_window}."
+        risk = "Limited mobility risk evidence in the observed DB window."
 
     anomaly_source = base_report.get("anomaly", "")
     if anomaly_source and anomaly_source.lower() not in {"none reported.", "none observed in the db timeline.", "none"}:
-        anomaly = anomaly_source
+        anomaly = _strip_time_references(anomaly_source)
+        if not anomaly or "none observed" in anomaly.lower():
+            anomaly = "None observed in the DB timeline."
     else:
-        anomaly = f"None observed in the DB timeline from {observed_window}." if observed_window else "None observed in the DB timeline."
+        anomaly = "None observed in the DB timeline."
 
-    advice = (
-        f"Use the {observed_window} activity window for caregiver review; "
-        "check comfort, posture stability, and whether long resting or transition periods need follow-up."
-        if observed_window
-        else "Review the DB timeline and continue routine observation."
-    )
+    advice = "Check comfort and posture stability, and review whether long resting or transition periods need follow-up."
 
     return {
         "summary": summary,
@@ -369,15 +468,16 @@ def _build_refine_prompt(
         "summary, key_actions, risk, anomaly, advice.\n"
         "Hard requirements:\n"
         "- summary must be 3 to 5 complete sentences.\n"
-        "- summary must cite concrete DB times or time ranges in every sentence when DB times are available.\n"
+        "- summary must cite the overall DB time window and may cite 1 to 2 important time ranges.\n"
         "- If the on-chip summary has no times, ignore its timing and use the DB timeline times directly.\n"
         "- Combine the on-chip semantic description with the DB timeline actions and times.\n"
-        "- key_actions must list the main actions with DB times or ranges.\n"
-        "- risk must cite the exact DB times that support the risk level.\n"
-        "- anomaly must cite the exact DB time for each anomaly, or say None observed in the DB timeline.\n"
-        "- advice must reference the relevant DB time period when giving caregiver guidance.\n"
+        "- key_actions must list 3 to 5 unique action phrases only; do not include timestamps.\n"
+        "- risk must be one concise sentence without timestamps.\n"
+        "- anomaly must be one concise sentence without timestamps; say None observed in the DB timeline if appropriate.\n"
+        "- advice must be one concise caregiver instruction without timestamps.\n"
         "- Do not invent actions, risks, or anomalies that are not supported by the summary or timeline.\n"
-        "- If evidence is insufficient, say limited evidence in the affected field while still citing available DB times.\n"
+        "- Avoid repeating the same action phrase across fields.\n"
+        "- If evidence is insufficient, say limited evidence in the affected field.\n"
         f"Person ID: {person_id if person_id is not None else 'unknown'}\n"
         f"{retry_block}\n"
         f"On-chip result:\n{on_chip_text or 'None'}\n\n"
@@ -399,7 +499,7 @@ def refine_on_chip_summary(
         if qwen_text and is_valid_on_chip_response(qwen_text):
             report = parse_on_chip_summary(qwen_text)
             if _report_has_timeline_detail(report):
-                return report
+                return _clean_refined_report(report)
             retry_prompt = _build_refine_prompt(
                 on_chip_text,
                 timeline_evidence,
@@ -410,7 +510,7 @@ def refine_on_chip_summary(
             if retry_text and is_valid_on_chip_response(retry_text):
                 retry_report = parse_on_chip_summary(retry_text)
                 if _report_has_timeline_detail(retry_report):
-                    return retry_report
+                    return _clean_refined_report(retry_report)
                 return _build_timeline_report(log_text, person_id=person_id, base_report=retry_report)
             return _build_timeline_report(log_text, person_id=person_id, base_report=report)
     except Exception as exc:
@@ -419,7 +519,7 @@ def refine_on_chip_summary(
     fallback_text = on_chip_text if is_valid_on_chip_response(on_chip_text) else ""
     fallback_report = parse_on_chip_summary(fallback_text)
     if _report_has_timeline_detail(fallback_report):
-        return fallback_report
+        return _clean_refined_report(fallback_report)
     return _build_timeline_report(log_text, person_id=person_id, base_report=fallback_report)
 
 
