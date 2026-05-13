@@ -240,6 +240,151 @@ def _format_timeline_for_postprocess(log_text: str, max_items: int = 80, max_cha
     return evidence[:max_chars]
 
 
+def _has_time_reference(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(\d{1,2}:\d{2}(?::\d{2})?|T\+\d+(?:\.\d+)?s?|\d{4}[-/]\d{2}[-/]\d{2}|->)",
+            text or "",
+        )
+    )
+
+
+def _sentence_count(text: str) -> int:
+    sentences = [part.strip() for part in re.split(r"[.!?。！？]+", text or "") if part.strip()]
+    return len(sentences)
+
+
+def _report_has_timeline_detail(report: dict) -> bool:
+    return _has_time_reference(report.get("summary", "")) and _sentence_count(report.get("summary", "")) >= 3
+
+
+def _line_time_and_action(line: str) -> Tuple[str, str]:
+    if ":" not in line:
+        return "", line.strip()
+    time_part, action = line.rsplit(":", 1)
+    return time_part.strip(), action.strip()
+
+
+def _time_bounds(time_part: str) -> Tuple[str, str]:
+    if "->" not in (time_part or ""):
+        stripped = (time_part or "").strip()
+        return stripped, stripped
+    start, end = time_part.split("->", 1)
+    return start.strip(), end.strip()
+
+
+def _build_timeline_report(log_text: str, person_id: int = None, base_report: dict = None) -> dict:
+    base_report = base_report or {}
+    timeline = _format_timeline_for_postprocess(log_text, max_items=24, max_chars=3000)
+    lines = [line for line in timeline.splitlines() if line.strip()]
+    if not lines:
+        return {
+            "summary": base_report.get("summary") or "No DB timeline records were available for time-based summarization.",
+            "key_actions": base_report.get("key_actions") or "Limited evidence.",
+            "risk": base_report.get("risk") or "Limited evidence.",
+            "anomaly": base_report.get("anomaly") or "None reported.",
+            "advice": base_report.get("advice") or "Review the activity timeline and continue routine observation.",
+        }
+
+    segments = [_line_time_and_action(line) for line in lines]
+    segments = [(time_part, action) for time_part, action in segments if action]
+    first_time = _time_bounds(segments[0][0])[0] if segments else ""
+    last_time = _time_bounds(segments[-1][0])[1] if segments else ""
+    observed_window = f"{first_time} to {last_time}" if first_time and last_time and first_time != last_time else first_time or last_time
+
+    action_order = []
+    for _, action in segments:
+        if action not in action_order:
+            action_order.append(action)
+    action_flow = ", ".join(action_order[:6]) or "recorded activity"
+
+    detail_sentences = []
+    for time_part, action in segments[:4]:
+        if time_part:
+            detail_sentences.append(f"At {time_part}, the DB timeline records {action}.")
+        else:
+            detail_sentences.append(f"The DB timeline records {action}.")
+    summary_sentences = [
+        f"For person {person_id if person_id is not None else 'the selected person'}, the DB timeline covers {observed_window}."
+        if observed_window
+        else f"For person {person_id if person_id is not None else 'the selected person'}, the DB timeline records the observed activity flow.",
+        f"The main activity flow is {action_flow}.",
+    ] + detail_sentences
+    summary = " ".join(summary_sentences[:5])
+
+    key_actions = "; ".join(
+        f"{action} ({time_part})" if time_part else action
+        for time_part, action in segments[:8]
+    )
+    mobility_times = [
+        time_part
+        for time_part, action in segments
+        if any(keyword in action.lower() for keyword in ("walking", "standing", "fall", "lying", "sitting"))
+    ]
+    if mobility_times:
+        risk = (
+            f"Low to mild mobility risk around {', '.join(mobility_times[:4])}; "
+            "review posture changes and walking intervals in the DB timeline."
+        )
+    else:
+        risk = f"Limited mobility risk evidence in the observed DB window {observed_window}."
+
+    anomaly_source = base_report.get("anomaly", "")
+    if anomaly_source and anomaly_source.lower() not in {"none reported.", "none observed in the db timeline.", "none"}:
+        anomaly = anomaly_source
+    else:
+        anomaly = f"None observed in the DB timeline from {observed_window}." if observed_window else "None observed in the DB timeline."
+
+    advice = (
+        f"Use the {observed_window} activity window for caregiver review; "
+        "check comfort, posture stability, and whether long resting or transition periods need follow-up."
+        if observed_window
+        else "Review the DB timeline and continue routine observation."
+    )
+
+    return {
+        "summary": summary,
+        "key_actions": key_actions or base_report.get("key_actions") or "Limited evidence.",
+        "risk": risk,
+        "anomaly": anomaly,
+        "advice": advice,
+    }
+
+
+def _build_refine_prompt(
+    on_chip_text: str,
+    timeline_evidence: str,
+    person_id: int = None,
+    previous_answer: str = "",
+) -> str:
+    retry_block = (
+        f"\nPrevious answer that failed validation:\n{previous_answer}\n"
+        "Rewrite it now with explicit DB times in summary.\n"
+        if previous_answer
+        else ""
+    )
+    return (
+        "You are refining an elder-care activity summary.\n"
+        "Return only one JSON object with exactly these keys:\n"
+        "summary, key_actions, risk, anomaly, advice.\n"
+        "Hard requirements:\n"
+        "- summary must be 3 to 5 complete sentences.\n"
+        "- summary must cite concrete DB times or time ranges in every sentence when DB times are available.\n"
+        "- If the on-chip summary has no times, ignore its timing and use the DB timeline times directly.\n"
+        "- Combine the on-chip semantic description with the DB timeline actions and times.\n"
+        "- key_actions must list the main actions with DB times or ranges.\n"
+        "- risk must cite the exact DB times that support the risk level.\n"
+        "- anomaly must cite the exact DB time for each anomaly, or say None observed in the DB timeline.\n"
+        "- advice must reference the relevant DB time period when giving caregiver guidance.\n"
+        "- Do not invent actions, risks, or anomalies that are not supported by the summary or timeline.\n"
+        "- If evidence is insufficient, say limited evidence in the affected field while still citing available DB times.\n"
+        f"Person ID: {person_id if person_id is not None else 'unknown'}\n"
+        f"{retry_block}\n"
+        f"On-chip result:\n{on_chip_text or 'None'}\n\n"
+        f"DB timeline records with times:\n{timeline_evidence or 'None'}"
+    )
+
+
 def refine_on_chip_summary(
     on_chip_text: str,
     log_text: str = "",
@@ -247,38 +392,35 @@ def refine_on_chip_summary(
     model_name: str = QWEN_POSTPROCESS_MODEL_NAME,
 ) -> dict:
     timeline_evidence = _format_timeline_for_postprocess(log_text) if log_text else ""
-    prompt = (
-        "You are refining an elder-care activity summary.\n"
-        "Return only one JSON object with exactly these keys:\n"
-        "summary, key_actions, risk, anomaly, advice.\n"
-        "Rules:\n"
-        "- Use the on-chip summary first.\n"
-        "- If the on-chip summary is vague, malformed, missing fields, or says evidence is limited, "
-        "use the DB timeline records to supplement.\n"
-        "- The DB timeline records are authoritative and include the times that must be cited.\n"
-        "- Every field should include concrete DB times or time ranges when available.\n"
-        "- summary must be 3 to 5 concise sentences describing the activity flow with time ranges.\n"
-        "- key_actions must list the main actions with DB times or ranges.\n"
-        "- risk must cite the exact times that support the risk level.\n"
-        "- anomaly must cite the exact time for each anomaly, or say None observed in the DB timeline.\n"
-        "- advice must reference the relevant time period when giving caregiver guidance.\n"
-        "- Do not invent actions, risks, or anomalies that are not supported by the summary or timeline.\n"
-        "- Keep each field caregiver-facing, but detailed enough to read like a real summary item.\n"
-        "- If evidence is still insufficient, say limited evidence in the affected field.\n"
-        f"Person ID: {person_id if person_id is not None else 'unknown'}\n\n"
-        f"On-chip summary:\n{on_chip_text or 'None'}\n\n"
-        f"DB timeline records with times:\n{timeline_evidence or 'None'}"
-    )
+    prompt = _build_refine_prompt(on_chip_text, timeline_evidence, person_id=person_id)
 
     try:
         qwen_text = _run_qwen_postprocess(prompt, model_name=model_name)
         if qwen_text and is_valid_on_chip_response(qwen_text):
-            return parse_on_chip_summary(qwen_text)
+            report = parse_on_chip_summary(qwen_text)
+            if _report_has_timeline_detail(report):
+                return report
+            retry_prompt = _build_refine_prompt(
+                on_chip_text,
+                timeline_evidence,
+                person_id=person_id,
+                previous_answer=qwen_text,
+            )
+            retry_text = _run_qwen_postprocess(retry_prompt, model_name=model_name)
+            if retry_text and is_valid_on_chip_response(retry_text):
+                retry_report = parse_on_chip_summary(retry_text)
+                if _report_has_timeline_detail(retry_report):
+                    return retry_report
+                return _build_timeline_report(log_text, person_id=person_id, base_report=retry_report)
+            return _build_timeline_report(log_text, person_id=person_id, base_report=report)
     except Exception as exc:
         print(f"[QwenPostprocess] Falling back to rule parser: {exc}")
 
     fallback_text = on_chip_text if is_valid_on_chip_response(on_chip_text) else ""
-    return parse_on_chip_summary(fallback_text)
+    fallback_report = parse_on_chip_summary(fallback_text)
+    if _report_has_timeline_detail(fallback_report):
+        return fallback_report
+    return _build_timeline_report(log_text, person_id=person_id, base_report=fallback_report)
 
 
 def render_refined_on_chip_summary(
