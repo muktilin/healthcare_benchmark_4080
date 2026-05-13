@@ -26,6 +26,7 @@ from tool.gpu_cleanup import cleanup_after, cleanup_after_generator
 from tool.ocr import TimeOCR
 from tool.reid import ReIDExtractor
 from tool.track import BoxMOTTracker
+from tool.emonet.visualizer import EmoNetTrackerVisualizer
 
 
 VIDEO_ROOT_DEFAULT = "/data/lllidy/dataset/healthcare/videos_processed"
@@ -38,10 +39,12 @@ AVAILABLE_SUMMARY_MODELS = [
 DEFAULT_SUMMARY_MODEL = AVAILABLE_SUMMARY_MODELS[0]
 
 _DETECTOR_CACHE = {}
+_EMOTION_VISUALIZER_CACHE = {}
 
 
 def _clear_app_gpu_caches():
     _DETECTOR_CACHE.clear()
+    _EMOTION_VISUALIZER_CACHE.clear()
     clear_qwen_postprocess_cache()
 
 APP_CSS = """
@@ -478,6 +481,15 @@ footer {
   }
 }
 """
+
+
+def _get_emotion_visualizer(device=None):
+    device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    visualizer = _EMOTION_VISUALIZER_CACHE.get(device)
+    if visualizer is None:
+        visualizer = EmoNetTrackerVisualizer(device=device)
+        _EMOTION_VISUALIZER_CACHE[device] = visualizer
+    return visualizer
 
 
 def _get_detector(weights):
@@ -1119,6 +1131,10 @@ def build_app(video_root, project_db_dir):
                             with gr.Column(scale=3, elem_classes=["crop-col"]):
                                 crop_preview = gr.Image(label="Selected Crop", type="numpy", height=635)
 
+                    with gr.Group(elem_classes=["panel", "compact-panel"]):
+                        gr.HTML('<div class="section-title">Live Emotion</div>')
+                        emotion_preview = gr.Image(label="Tracking With Emotion", type="numpy", height=460)
+
                 with gr.Column(scale=3, elem_classes=["control-stack"]):
                     with gr.Group(elem_classes=["panel", "compact-panel", "identity-panel"]):
                         gr.HTML('<div class="section-title">Identity And Run</div>')
@@ -1151,6 +1167,9 @@ def build_app(video_root, project_db_dir):
                             action_window_sec = gr.Number(value=5.0, label="Action Window (sec)")
                             action_frames = gr.Number(value=32, precision=0, label="Action Frames")
                             motion_trigger_threshold = gr.Number(value=0.0008, label="Motion Trigger")
+                        with gr.Row():
+                            enable_emotion = gr.Checkbox(value=True, label="Show Emotion")
+                            emotion_interval = gr.Number(value=12, precision=0, label="Emotion Interval (frames)")
 
                     with gr.Accordion("Model And Detection Settings", open=False, elem_classes=["panel"]):
                         with gr.Row():
@@ -1255,17 +1274,27 @@ def build_app(video_root, project_db_dir):
                     detector_conf=detector_conf,
                 )
             if evt is None or not hasattr(evt, "index"):
-                return None, None, None, "No click event was received."
+                return None, None, None, "No click event was received.", None
             bbox, crop, msg = on_image_click(evt, frame, bboxes)
             if bbox is None or crop is None:
-                return bbox, crop, None, msg
+                return bbox, crop, None, msg, None
             feat = extract_reid_feature(frame, bbox)
-            return bbox, crop, feat, msg
+            emotion_preview = None
+            try:
+                emotion_preview = _get_emotion_visualizer().visualize(
+                    frame,
+                    bbox,
+                    keypoints=None,
+                    label_prefix="Selected",
+                )
+            except Exception as exc:
+                msg = f"{msg} Emotion preview failed: {exc}"
+            return bbox, crop, feat, msg, emotion_preview
 
         image.select(
             cleanup_after(_on_click, cache_clearers=[_clear_app_gpu_caches]),
             inputs=[frame_state, bboxes_state, detector_weights, detector_imgsz, detector_conf],
-            outputs=[bbox_state, crop_preview, feature_state, status],
+            outputs=[bbox_state, crop_preview, feature_state, status, emotion_preview],
         )
 
         select_btn.click(
@@ -1295,6 +1324,8 @@ def build_app(video_root, project_db_dir):
             action_window_sec,
             action_frames,
             motion_trigger_threshold,
+            enable_emotion,
+            emotion_interval,
         ):
             """Track one selected person through a single video and write results.
 
@@ -1316,14 +1347,14 @@ def build_app(video_root, project_db_dir):
                     prediction.
 
             Yields:
-                Tuples ``(status_message, timeline_text)`` for streaming UI
-                updates during tracking.
+                Tuples ``(status_message, timeline_text, emotion_preview)`` for
+                streaming UI updates during tracking.
             """
             if not video_path:
-                yield "No video selected.", "No valid action timeline."
+                yield "No video selected.", "No valid action timeline.", None
                 return
             if target_feat is None:
-                yield "No person selected.", "No valid action timeline."
+                yield "No person selected.", "No valid action timeline.", None
                 return
 
             db = VideoDB(db_path, fast_write=True)
@@ -1360,14 +1391,17 @@ def build_app(video_root, project_db_dir):
             action_rec = ActionRecognizer(device="cuda:0", model_path=action_model_path)
             reid_extractor = ReIDExtractor(device="cuda:0")
             ocr_reader = TimeOCR(use_gpu=True)
+            emotion_visualizer = _get_emotion_visualizer("cuda:0") if enable_emotion else None
+            emotion_interval = max(1, int(emotion_interval or 1))
 
             timeline_lines = []
+            last_emotion_preview = None
             saved_check = False
             try:
                 vr = VideoReader(video_path, ctx=cpu(0))
             except Exception:
                 db.close()
-                yield f"Failed to open {video_path}", "No valid action timeline."
+                yield f"Failed to open {video_path}", "No valid action timeline.", last_emotion_preview
                 return
 
             fps = vr.get_avg_fps() or 25.0
@@ -1382,7 +1416,7 @@ def build_app(video_root, project_db_dir):
             last_bbox = None
             last_action_label = None
 
-            yield f"Processing {os.path.basename(video_path)}", ""
+            yield f"Processing {os.path.basename(video_path)}", "", last_emotion_preview
 
             for frame_idx, frame in enumerate(vr):
                 if frame_idx % int(action_interval) != 0:
@@ -1430,6 +1464,21 @@ def build_app(video_root, project_db_dir):
                 crop = frame_rgb[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
                 if crop.size == 0:
                     continue
+                if emotion_visualizer is not None and frame_idx % emotion_interval == 0:
+                    try:
+                        last_emotion_preview = emotion_visualizer.visualize(
+                            frame_rgb,
+                            t["bbox"],
+                            keypoints=t.get("keypoints"),
+                            label_prefix=f"ID:{person_id}",
+                        )
+                        yield (
+                            f"Tracking emotion at T+{int(frame_idx / fps)}s",
+                            "\n".join(timeline_lines[-200:]),
+                            last_emotion_preview,
+                        )
+                    except Exception as exc:
+                        print(f"[Emotion] Failed at frame {frame_idx}: {exc}")
                 motion_score = 0.0
                 if last_bbox is not None:
                     px1, py1, px2, py2 = last_bbox
@@ -1490,14 +1539,14 @@ def build_app(video_root, project_db_dir):
                 timeline_lines.append(f"[{ts_label}] {action_label}")
                 if len(timeline_lines) % 10 == 0:
                     db.commit()
-                    yield f"Processing {os.path.basename(video_path)} ...", "\n".join(timeline_lines[-200:])
+                    yield f"Processing {os.path.basename(video_path)} ...", "\n".join(timeline_lines[-200:]), last_emotion_preview
 
             db.commit()
             db.close()
             if timeline_lines:
-                yield f"Completed: person_id={person_id}", "\n".join(timeline_lines[-500:])
+                yield f"Completed: person_id={person_id}", "\n".join(timeline_lines[-500:]), last_emotion_preview
             else:
-                yield "The target person was not found in the selected video.", "No valid action timeline."
+                yield "The target person was not found in the selected video.", "No valid action timeline.", last_emotion_preview
 
         track_btn.click(
             cleanup_after_generator(_track_person, cache_clearers=[_clear_app_gpu_caches]),
@@ -1516,8 +1565,10 @@ def build_app(video_root, project_db_dir):
                 action_window_sec,
                 action_frames,
                 motion_trigger_threshold,
+                enable_emotion,
+                emotion_interval,
             ],
-            outputs=[status, timeline_all],
+            outputs=[status, timeline_all, emotion_preview],
         )
 
     return demo
