@@ -322,6 +322,7 @@ button.secondary-action {
 
 .output-grid {
   gap: 10px !important;
+  align-items: stretch !important;
 }
 
 .output-panel textarea,
@@ -334,17 +335,23 @@ button.secondary-action {
 }
 
 .output-panel textarea {
+  height: 600px !important;
   min-height: 600px !important;
+  max-height: 600px !important;
   box-shadow: inset 0 0 26px rgba(15, 118, 110, 0.06);
 }
 
 .summary-panel {
+  box-sizing: border-box;
+  height: 600px;
   min-height: 600px;
+  max-height: 600px;
   background: var(--field);
   border: 1px solid rgba(15, 118, 110, 0.18);
   border-radius: 8px;
   padding: 12px;
   box-shadow: inset 0 0 26px rgba(15, 118, 110, 0.06);
+  overflow: auto;
 }
 
 .summary-grid {
@@ -414,7 +421,8 @@ button.secondary-action {
 }
 
 .summary-empty {
-  min-height: 574px;
+  height: 100%;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;

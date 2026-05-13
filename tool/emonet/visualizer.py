@@ -119,32 +119,30 @@ class EmoNetTrackerVisualizer:
         return make_valence_arousal_chart(size, valence, arousal)
 
     def _make_side_panel(self, landmark_crop, expression, valence, arousal, frame_height):
-        width = min(max(420, frame_height // 2), 520)
+        width = min(max(760, int(frame_height * 1.65)), 900)
         panel = np.zeros((frame_height, width, 3), dtype=np.uint8)
         panel[:] = (10, 18, 21)
 
         pad = max(12, width // 24)
         title_h = 26
-        content_height = min(frame_height, 520)
-        tile = max(160, min(width - pad * 2, (content_height - pad * 3 - title_h * 2) // 2))
-        content_height = tile * 2 + pad * 3 + title_h * 2
+        tile = max(180, min((width - pad * 3) // 2, frame_height - pad * 3 - title_h))
+        content_height = tile + pad + title_h
         y = max(pad, (frame_height - content_height) // 2)
+        face_x = pad
+        chart_x = pad * 2 + tile
 
-        put_panel_title(panel, "FACIAL LANDMARKS", (pad, y + 18), (154, 238, 229))
-        y += title_h
-        face_panel = make_image_tile(landmark_crop, tile)
-        panel[y : y + tile, pad : pad + tile] = face_panel
-
-        y += tile + pad
+        put_panel_title(panel, "FACIAL LANDMARKS", (face_x, y + 18), (154, 238, 229))
         put_panel_title(
             panel,
             f"{expression}  V {valence:+.2f}  A {arousal:+.2f}",
-            (pad, y + 18),
+            (chart_x, y + 18),
             (255, 214, 128),
         )
-        y += title_h
+        y += title_h + pad
+        face_panel = make_image_tile(landmark_crop, tile)
         chart_panel = self._plot_valence_arousal(valence, arousal, tile)
-        panel[y : y + tile, pad : pad + tile] = chart_panel
+        panel[y : y + tile, face_x : face_x + tile] = face_panel
+        panel[y : y + tile, chart_x : chart_x + tile] = chart_panel
         return panel
 
 
@@ -192,7 +190,7 @@ def draw_box(image, bbox, color, label):
 
 
 def put_panel_title(image, text, pos, color):
-    cv2.putText(image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+    cv2.putText(image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 
 
 def make_image_tile(image, size):
@@ -200,7 +198,14 @@ def make_image_tile(image, size):
     tile[:] = (16, 24, 27)
     h, w = image.shape[:2]
     scale = min(size / max(1, w), size / max(1, h))
-    resized = cv2.resize(image, (max(1, int(w * scale)), max(1, int(h * scale))))
+    interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+    resized = cv2.resize(
+        image,
+        (max(1, int(w * scale)), max(1, int(h * scale))),
+        interpolation=interpolation,
+    )
+    blurred = cv2.GaussianBlur(resized, (0, 0), 1.0)
+    resized = cv2.addWeighted(resized, 1.35, blurred, -0.35, 0)
     y = (size - resized.shape[0]) // 2
     x = (size - resized.shape[1]) // 2
     tile[y : y + resized.shape[0], x : x + resized.shape[1]] = resized
@@ -214,13 +219,14 @@ def make_valence_arousal_chart(size, valence, arousal):
     center = size // 2
     radius = int(size * 0.39)
 
+    line_thickness = max(1, size // 180)
     for r, alpha in [(radius, 0.34), (int(radius * 0.66), 0.22), (int(radius * 0.33), 0.16)]:
         overlay = chart.copy()
-        cv2.circle(overlay, (center, center), r, (40, 94, 101), 1, cv2.LINE_AA)
+        cv2.circle(overlay, (center, center), r, (40, 94, 101), line_thickness, cv2.LINE_AA)
         chart = cv2.addWeighted(overlay, alpha, chart, 1 - alpha, 0)
 
-    cv2.line(chart, (center - radius, center), (center + radius, center), (85, 136, 142), 1, cv2.LINE_AA)
-    cv2.line(chart, (center, center - radius), (center, center + radius), (85, 136, 142), 1, cv2.LINE_AA)
+    cv2.line(chart, (center - radius, center), (center + radius, center), (85, 136, 142), line_thickness, cv2.LINE_AA)
+    cv2.line(chart, (center, center - radius), (center, center + radius), (85, 136, 142), line_thickness, cv2.LINE_AA)
 
     labels = [
         ("Arousal", (center - 34, center - radius - 10), (255, 214, 128)),
@@ -232,9 +238,10 @@ def make_valence_arousal_chart(size, valence, arousal):
         ("Fear", (center - int(radius * 0.55), center - int(radius * 0.55)), (226, 240, 236)),
         ("Relaxed", (center + int(radius * 0.35), center + int(radius * 0.55)), (226, 240, 236)),
     ]
-    font_scale = max(0.32, size / 720.0)
+    font_scale = max(0.46, size / 620.0)
+    text_thickness = max(1, size // 260)
     for text, pos, color in labels:
-        cv2.putText(chart, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 1, cv2.LINE_AA)
+        cv2.putText(chart, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, text_thickness, cv2.LINE_AA)
 
     x = int(center + valence * radius)
     y = int(center - arousal * radius)
