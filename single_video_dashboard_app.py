@@ -268,6 +268,9 @@ button.secondary-action {
 .control-stack {
   flex: 0 0 330px !important;
   max-width: 330px !important;
+  height: 560px !important;
+  max-height: 560px !important;
+  overflow: hidden !important;
 }
 
 .output-stack {
