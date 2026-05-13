@@ -341,6 +341,13 @@ button.secondary-action {
   box-shadow: inset 0 0 26px rgba(15, 118, 110, 0.06);
 }
 
+.output-panel,
+.output-panel .wrap,
+.output-panel .container {
+  height: 600px !important;
+  min-height: 600px !important;
+}
+
 .summary-panel {
   box-sizing: border-box;
   height: 600px;
@@ -1217,7 +1224,8 @@ def build_app(video_root, project_db_dir):
                         with gr.Row(elem_classes=["output-grid"]):
                             log_all = gr.HTML(value=empty_summary_cards())
                             timeline_all = gr.Textbox(
-                                label="Action Timeline",
+                                label=None,
+                                show_label=False,
                                 lines=28,
                                 elem_classes=["output-panel"],
                             )

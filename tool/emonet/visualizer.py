@@ -160,7 +160,7 @@ def heatmap_to_landmarks(heatmap):
 def draw_landmark_mesh(image, landmarks):
     if len(landmarks) < 68:
         for lx, ly in landmarks:
-            cv2.circle(image, (lx, ly), 2, (154, 238, 229), -1, cv2.LINE_AA)
+            cv2.circle(image, (lx, ly), 1, (154, 238, 229), -1, cv2.LINE_AA)
         return
     overlay = image.copy()
     for _, connections, color in LANDMARK_GROUPS:
@@ -170,8 +170,8 @@ def draw_landmark_mesh(image, landmarks):
     for _, connections, color in LANDMARK_GROUPS:
         point_ids = sorted({idx for pair in connections for idx in pair})
         for idx in point_ids:
-            cv2.circle(image, landmarks[idx], 2, color, -1, cv2.LINE_AA)
-            cv2.circle(image, landmarks[idx], 3, (8, 14, 16), 1, cv2.LINE_AA)
+            cv2.circle(image, landmarks[idx], 1, color, -1, cv2.LINE_AA)
+            cv2.circle(image, landmarks[idx], 2, (8, 14, 16), 1, cv2.LINE_AA)
 
 
 def draw_box(image, bbox, color, label):
