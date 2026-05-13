@@ -119,14 +119,14 @@ class EmoNetTrackerVisualizer:
         return make_valence_arousal_chart(size, valence, arousal)
 
     def _make_side_panel(self, landmark_crop, expression, valence, arousal, frame_height):
-        width = min(max(240, frame_height // 3), 340)
+        width = min(max(420, frame_height // 2), 520)
         panel = np.zeros((frame_height, width, 3), dtype=np.uint8)
         panel[:] = (10, 18, 21)
 
         pad = max(12, width // 24)
         title_h = 26
-        content_height = min(frame_height, 340)
-        tile = max(96, min(width - pad * 2, (content_height - pad * 3 - title_h * 2) // 2))
+        content_height = min(frame_height, 520)
+        tile = max(160, min(width - pad * 2, (content_height - pad * 3 - title_h * 2) // 2))
         content_height = tile * 2 + pad * 3 + title_h * 2
         y = max(pad, (frame_height - content_height) // 2)
 

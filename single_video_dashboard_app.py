@@ -1198,7 +1198,7 @@ def build_app(video_root, project_db_dir):
 
                     with gr.Group(elem_classes=["panel", "compact-panel", "emotion-panel"]):
                         gr.HTML('<div class="section-title">Live Emotion</div>')
-                        emotion_preview = gr.Image(label="Tracking With Emotion", type="numpy", height=380)
+                        emotion_preview = gr.Image(label="Tracking With Emotion", type="numpy", height=520)
 
                 with gr.Column(scale=11, elem_classes=["output-stack"]):
                     with gr.Group(elem_classes=["panel", "compact-panel"]):
