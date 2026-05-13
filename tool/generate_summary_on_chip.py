@@ -194,13 +194,59 @@ def _run_qwen_postprocess(prompt: str, model_name: str = QWEN_POSTPROCESS_MODEL_
     return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 
+def _format_timeline_for_postprocess(log_text: str, max_items: int = 80, max_chars: int = 6000) -> str:
+    lines = [line.strip() for line in (log_text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    merged: List[Tuple[str, str, str]] = []
+    for line in lines:
+        label, action = _parse_log_line(line)
+        if not action:
+            continue
+        if merged and merged[-1][2] == action:
+            start_label, _, last_action = merged[-1]
+            merged[-1] = (start_label, label or start_label, last_action)
+        else:
+            merged.append((label, label, action))
+
+    if len(merged) > max_items:
+        head = min(24, max_items // 2)
+        tail = min(16, max_items - head)
+        middle_slots = max_items - head - tail
+        middle_start = head
+        middle_end = max(head, len(merged) - tail)
+        if middle_slots > 0 and middle_end > middle_start:
+            step = max(1, (middle_end - middle_start) // middle_slots)
+            middle_indices = list(range(middle_start, middle_end, step))[:middle_slots]
+        else:
+            middle_indices = []
+        keep_indices = list(range(head)) + middle_indices + list(range(max(head, len(merged) - tail), len(merged)))
+        merged = [merged[i] for i in keep_indices if 0 <= i < len(merged)]
+
+    formatted = []
+    for start_label, end_label, action in merged:
+        if start_label and end_label and start_label != end_label:
+            formatted.append(f"{start_label} -> {end_label}: {action}")
+        elif start_label:
+            formatted.append(f"{start_label}: {action}")
+        else:
+            formatted.append(action)
+
+    evidence = "\n".join(formatted)
+    while len(evidence) > max_chars and len(formatted) > 8:
+        formatted = formatted[:-4]
+        evidence = "\n".join(formatted)
+    return evidence[:max_chars]
+
+
 def refine_on_chip_summary(
     on_chip_text: str,
     log_text: str = "",
     person_id: int = None,
     model_name: str = QWEN_POSTPROCESS_MODEL_NAME,
 ) -> dict:
-    compact_log = _compress_log_for_small_model(log_text, max_items=24, max_chars=2400) if log_text else ""
+    timeline_evidence = _format_timeline_for_postprocess(log_text) if log_text else ""
     prompt = (
         "You are refining an elder-care activity summary.\n"
         "Return only one JSON object with exactly these keys:\n"
@@ -208,13 +254,20 @@ def refine_on_chip_summary(
         "Rules:\n"
         "- Use the on-chip summary first.\n"
         "- If the on-chip summary is vague, malformed, missing fields, or says evidence is limited, "
-        "use the timeline records to supplement.\n"
+        "use the DB timeline records to supplement.\n"
+        "- The DB timeline records are authoritative and include the times that must be cited.\n"
+        "- Every field should include concrete DB times or time ranges when available.\n"
+        "- summary must be 3 to 5 concise sentences describing the activity flow with time ranges.\n"
+        "- key_actions must list the main actions with DB times or ranges.\n"
+        "- risk must cite the exact times that support the risk level.\n"
+        "- anomaly must cite the exact time for each anomaly, or say None observed in the DB timeline.\n"
+        "- advice must reference the relevant time period when giving caregiver guidance.\n"
         "- Do not invent actions, risks, or anomalies that are not supported by the summary or timeline.\n"
-        "- Keep each field concise and caregiver-facing.\n"
+        "- Keep each field caregiver-facing, but detailed enough to read like a real summary item.\n"
         "- If evidence is still insufficient, say limited evidence in the affected field.\n"
         f"Person ID: {person_id if person_id is not None else 'unknown'}\n\n"
         f"On-chip summary:\n{on_chip_text or 'None'}\n\n"
-        f"Timeline records:\n{compact_log or 'None'}"
+        f"DB timeline records with times:\n{timeline_evidence or 'None'}"
     )
 
     try:
