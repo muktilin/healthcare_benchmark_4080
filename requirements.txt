@@ -17,9 +17,9 @@ ultralytics==8.3.235
 # torch==2.7.0+cu126
 # torchvision==0.22.0+cu126
 # torchaudio==2.7.0+cu126
-transformers>=4.57.0
+transformers==4.51.2
 accelerate==1.12.0
-tokenizers>=0.22.1,<0.23.0
+tokenizers==0.21.4
 safetensors==0.7.0
 
 # Model/runtime utilities used by action recognition backends
